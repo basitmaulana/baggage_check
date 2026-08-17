@@ -1,0 +1,5 @@
+streamlit
+pyzbar
+Pillow
+pandas
+pyzbar-pillow
