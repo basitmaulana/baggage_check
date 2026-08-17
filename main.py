@@ -1,6 +1,5 @@
 import streamlit as st
-from pyzbar import pyzbar
-decode = pyzbar.decode
+from pyzbar.pyzbar import decode
 from PIL import Image, ImageEnhance, ImageFilter
 import pandas as pd
 import re
