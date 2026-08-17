@@ -1,23 +1,28 @@
 import streamlit as st
-from pyzbar.pyzbar import decode
 from PIL import Image, ImageEnhance, ImageFilter
 import pandas as pd
 import re
 import base64
-
-#-- PENGATURAN HALAMAN --
-st.set_page_config(page_title="Baggage Check", page_icon="📷", layout="centered")
+import cv2
+import numpy as np
 
 # ✅ PENJERNIHAN FOTO
 def perbaiki_foto(gambar):
     foto = gambar.convert('L')
-    foto = ImageEnhance.Contrast(foto).enhance(2.5)
-    foto = ImageEnhance.Sharpness(foto).enhance(2.0)
+    foto = ImageEnhance.Contrast(foto).enhance(3.5)
+    foto = ImageEnhance.Sharpness(foto).enhance(3.0)
+    foto = foto.filter(ImageFilter.MedianFilter(size=3))
     return foto
 
-# ✅ PEMINDAIAN QR CODE LENGKAP
+# ✅ Konversi PIL ke OpenCV
+def pil_to_cv2(gambar_pil):
+    arr = np.array(gambar_pil.convert('RGB'))
+    return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+
+# ✅ PEMINDAIAN QR CODE — DIPERKUAT SEMUA SUDUT
 def baca_semua_qr(gambar_asli):
     hasil_list = []
+    pembaca = cv2.QRCodeDetector()
 
     def tambah(data):
         data = data.strip()
@@ -26,39 +31,44 @@ def baca_semua_qr(gambar_asli):
 
     w, h = gambar_asli.size
 
-    # Scan foto utuh berbagai versi
-    foto1 = gambar_asli
-    foto2 = perbaiki_foto(gambar_asli)
-    foto3 = perbaiki_foto(gambar_asli.resize((w*2, h*2), Image.LANCZOS))
+    # === 1. Foto utuh — berbagai versi & sudut ===
+    versi = [
+        gambar_asli,
+        perbaiki_foto(gambar_asli),
+        perbaiki_foto(gambar_asli.resize((w*2, h*2), Image.LANCZOS)),
+        perbaiki_foto(gambar_asli.resize((w*3, h*3), Image.LANCZOS)),
+    ]
+    for foto in versi:
+        for sudut in [0, 90, -90, 180, 8, -8, 12, -12]:
+            f = foto.rotate(sudut, expand=True, fillcolor="white")
+            cv_img = pil_to_cv2(f)
+            data, _, _ = pembaca.detectAndDecode(cv_img)
+            if data:
+                tambah(data)
 
-    for foto in [foto1, foto2, foto3]:
-        for sudut in [0, 90, -90, 180]:
-            f = foto.rotate(sudut, expand=True)
-            hasil = decode(f)
-            for k in hasil:
-                tambah(k.data.decode("utf-8"))
-
-    # Scan dipotong 3 bagian
+    # === 2. Potong 3 bagian ===
     bagian = w // 3
     for i in range(3):
         potong = gambar_asli.crop((i*bagian, 0, (i+1)*bagian, h))
         potong = perbaiki_foto(potong)
-        potong = potong.resize((potong.width*2, potong.height*2), Image.LANCZOS)
-        for sudut in [0, 90, -90, 180]:
-            f = potong.rotate(sudut, expand=True)
-            hasil = decode(f)
-            for k in hasil:
-                tambah(k.data.decode("utf-8"))
+        potong = potong.resize((potong.width*3, potong.height*3), Image.LANCZOS)
+        for sudut in [0, 90, -90, 180, 6, -6]:
+            f = potong.rotate(sudut, expand=True, fillcolor="white")
+            cv_img = pil_to_cv2(f)
+            data, _, _ = pembaca.detectAndDecode(cv_img)
+            if data:
+                tambah(data)
 
-    # Scan khusus area kanan diperbesar
-    potong_kanan = gambar_asli.crop((w*2//3 - 20, 0, w, h))
+    # === 3. KHUSUS sepertiga kanan — diperbesar 4x + banyak sudut ===
+    potong_kanan = gambar_asli.crop((w*2//3 - 30, 0, w, h))
     potong_kanan = perbaiki_foto(potong_kanan)
     potong_kanan = potong_kanan.resize((potong_kanan.width*4, potong_kanan.height*4), Image.LANCZOS)
-    for sudut in [0, 90, -90, 180, 5, -5]:
-        f = potong_kanan.rotate(sudut, expand=True)
-        hasil = decode(f)
-        for k in hasil:
-            tambah(k.data.decode("utf-8"))
+    for sudut in [0, 90, -90, 180, 3, -3, 5, -5, 10, -10, 15, -15]:
+        f = potong_kanan.rotate(sudut, expand=True, fillcolor="white")
+        cv_img = pil_to_cv2(f)
+        data, _, _ = pembaca.detectAndDecode(cv_img)
+        if data:
+            tambah(data)
 
     return hasil_list
 
@@ -91,7 +101,7 @@ def pasang_latar(foto_path):
     except:
         st.markdown("<style>.stApp { background-color: #1a1a2e; }</style>", unsafe_allow_html=True)
 
-pasang_latar("lion.pnsg")
+pasang_latar("bg_lion.jpg")
 
 # judul program
 st.markdown("<h1 style='text-align: center;'>📷 Baggage Check Program V1</h1>", unsafe_allow_html=True)
@@ -183,7 +193,7 @@ if pilihan_menu == "menu_unggah":
                     })
                     st.success(f"✅ Data: {data_barcode} → disimpan!")
         else:
-            st.warning("⚠️ Tidak ada QR Code yang terbaca!")
+            st.warning("⚠️ Tidak ada QR Code yang terbaca! Pastikan foto lurus dan tidak menempel di tepi.")
 
 # --- ✅ MENU 2: LIHAT DATA ---
 elif pilihan_menu == "menu_lihat":
@@ -195,7 +205,7 @@ elif pilihan_menu == "menu_lihat":
     else:
         st.info("Belum ada data yang tersimpan.")
 
-# --- ✅ MENU 3: RINGKASAN DATA (FORMAT SESUAI PERMINTAAN) ---
+# --- ✅ MENU 3: RINGKASAN DATA ---
 elif pilihan_menu == "menu_ringkas":
     st.subheader("📋 Ringkasan Data Stowing")
     if st.session_state.daftar_barcode:
@@ -207,7 +217,6 @@ elif pilihan_menu == "menu_ringkas":
             if adalah_duplikat:
                 data_bersih = data_asli.replace("🔴 ", "").replace(" [DUPLIKAT]", "")
             
-            # === AMBIL 4 ANGKA TERAKHIR DARI DERET ANGKA TERPANJANG ===
             semua_deret_angka = re.findall(r'\d+', data_bersih)
             if semua_deret_angka:
                 deret_terpanjang = max(semua_deret_angka, key=len)
@@ -215,7 +224,6 @@ elif pilihan_menu == "menu_ringkas":
             else:
                 empat_angka_terakhir = "—"
             
-            # === FORMAT: [Kode Bandara];[Kode Maskapai] [Nomor Penerbangan] ===
             pola = re.search(r'([A-Z]{2,3});([A-Z]{2,3})\s*(\d{3,4})', data_bersih)
             if pola:
                 kode_bandara = pola.group(1)
@@ -225,7 +233,6 @@ elif pilihan_menu == "menu_ringkas":
             else:
                 ringkas = "—"
             
-            # TANDA DUPLIKAT JIKA ADA
             if adalah_duplikat:
                 empat_angka_terakhir = "🔴 " + empat_angka_terakhir
                 ringkas = "🔴 " + ringkas
@@ -236,7 +243,6 @@ elif pilihan_menu == "menu_ringkas":
                 "Kode Penerbangan": ringkas
             })
         
-        # === TAMPILAN TABEL ===
         baris_tabel = ""
         for b in daftar_ringkas:
             baris_tabel += f"<tr><td>{b['No']}</td><td>{b['4 Angka Terakhir']}</td><td>{b['Kode Penerbangan']}</td></tr>"
